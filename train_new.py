@@ -2,7 +2,7 @@ from temporalgan.gen_s2_lc_v1_0 import Generator
 from temporalgan.disc_s2_lc_v1_0 import Discriminator
 from dataset.o2s_dataset import O2SDataset
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, RandomHorizontalFlip, ToTensor, Normalize
+from torchvision.transforms import Compose, ToTensor, Normalize
 import sys
 from pathlib import Path
 import yaml
@@ -13,6 +13,8 @@ from datetime import datetime
 import os
 from torch.utils.tensorboard import SummaryWriter
 from trainer import Trainer
+import random
+import numpy as np
 
 def load_config(config_path: str):
     try:
@@ -23,13 +25,25 @@ def load_config(config_path: str):
         print(f'{e}: Your config path is not valid.')
         sys.exit(1)
 
+
+def set_seed(seed=42):
+    """Set seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 if __name__ == '__main__':
+    set_seed(42) # Set seed
     parser = ArgumentParser(prog="Model Training")
     parser.add_argument('--config_path', type=str, required=True)
     
     args = parser.parse_args()
     #---------Load yaml file---------------
-
     config_dict = load_config(args.config_path)
     cfg_data = config_dict['data']
     cfg_train = config_dict['train']
@@ -56,7 +70,6 @@ if __name__ == '__main__':
 
 
     #-------------Dataset, Dataloader-----------
-
     transform_RGB = Compose(transforms=[
         ToTensor(),
         Normalize(mean=[0.5, 0.5, 0.5], std = [0.5, 0.5, 0.5])
@@ -66,7 +79,7 @@ if __name__ == '__main__':
         ToTensor(),
         Normalize(mean=[0.5], std=[0.5])
     ])
-    
+
         #------Dataset--------------
     train_set = O2SDataset(train=True, transform_rgb=transform_RGB, transform_gray= transform_gray, cfg_data=cfg_data)
     valid_set = O2SDataset(valid=True, transform_rgb=transform_RGB, transform_gray=transform_gray, cfg_data=cfg_data)
@@ -102,5 +115,3 @@ if __name__ == '__main__':
     #----------Train-----------
     train = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, ckp_path)
     train.run()
-
-
