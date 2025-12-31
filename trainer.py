@@ -9,6 +9,8 @@ from torch.nn import L1Loss
 from ignite.metrics import PSNR, SSIM
 from ignite.engine import Engine
 from torchvision.utils import make_grid
+from pathlib import Path
+
 
 def denorm(x):
     return (x * 0.5 + 0.5).clamp(0, 1)
@@ -67,7 +69,7 @@ class Trainer():
     def _load_checkpoint(self, resume_path):
         try:
             # Load checkpoint
-            checkpoint = torch.load(resume_path)
+            checkpoint = torch.load(Path(resume_path))
             self.netG.load_state_dict(checkpoint['netG_state_dict'])
             self.netD.load_state_dict(checkpoint['netD_state_dict'])
             self.optG.load_state_dict(checkpoint['optG_state_dict'])
@@ -116,7 +118,7 @@ class Trainer():
                 s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
                 s1_fake = self.netG(s2, lc)
 
-            return denorm(s1_fake), denorm(s1), denorm(s2)
+            return denorm(s1_fake), denorm(s1), denorm(s2), denorm(lc)
         
         # compute loss of train set
         lossG_avg = self.loss_G / self.val_step
@@ -124,9 +126,11 @@ class Trainer():
         lossD_avg = self.loss_D / self.val_step
 
         print(f"""Step [{current_step}/{self.total_steps}]
+            \n{20 * '-'}
             \nAverage Train L1 Loss: {lossL1_avg:.3f}
             \nAverage Train G Loss: {lossG_avg:.3f}
             \nAverage Train D Loss: {lossD_avg:.3f}
+            \n{20 * '-'}
                 """)
         print(f'Start Validating...')
         
@@ -147,7 +151,7 @@ class Trainer():
         self.writer.add_scalar(tag='Metrics/SSIM', scalar_value = ssim_avg, global_step = current_step)
 
         # Log images
-        fake, real, inp = evaluator.state.output
+        fake, real, s2, lc = evaluator.state.output
         n_imgs = min(8, fake.size(0))
         
         # def to_vis(x):
@@ -157,7 +161,8 @@ class Trainer():
 
         self.writer.add_image('Images/Fake', make_grid((fake)[:n_imgs], nrow=4), current_step)
         self.writer.add_image('Images/Real', make_grid((real)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/Input', make_grid((inp)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/S2', make_grid((s2)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/LC', make_grid((lc)[:n_imgs], nrow=4), current_step)
 
         # Check best ssim and save checkpoint
         is_best_ssim = ssim_avg > self.best_ssim
@@ -169,7 +174,7 @@ class Trainer():
         
         self._save_checkpoint(current_step, is_best_ssim)
 
-        # Reset loss
+        # Reset losses
         self.loss_D = 0.0
         self.loss_G = 0.0
         self.loss_l1 = 0.0
