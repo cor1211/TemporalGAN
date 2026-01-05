@@ -6,7 +6,7 @@ from tqdm import tqdm
 # from src import l1_loss, lratio_loss, psnr_torch, ssim_torch, gradient_loss
 from torch.nn import BCEWithLogitsLoss
 from torch.nn import L1Loss
-from ignite.metrics import PSNR, SSIM
+from ignite.metrics import PSNR, SSIM, Loss
 from ignite.engine import Engine
 from torchvision.utils import make_grid
 from pathlib import Path
@@ -118,7 +118,7 @@ class Trainer():
                 s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
                 s1_fake = self.netG(s2, lc)
 
-            return denorm(s1_fake), denorm(s1), denorm(s2), denorm(lc)
+            return s1_fake, s1, s2, lc
         
         # compute loss of train set
         lossG_avg = self.loss_G / self.val_step
@@ -136,17 +136,23 @@ class Trainer():
         
         # compute metrics of valid set
         evaluator = Engine(eval_step)
-        PSNR(data_range=1.0, output_transform=lambda x: (x[0], x[1])).attach(evaluator, 'psnr')
-        SSIM(data_range=1.0, output_transform=lambda x: (x[0], x[1])).attach(evaluator, 'ssim')
+        Loss(self.criterion_L1, output_transform=lambda x: (x[0], x[1])).attach(evaluator, 'l1')
+        PSNR(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(evaluator, 'psnr')
+        SSIM(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(evaluator, 'ssim')
         evaluator.run(tqdm(self.valid_loader, desc="Validating", leave=False))
+        l1_avg = evaluator.state.metrics['l1']
         psnr_avg = evaluator.state.metrics['psnr']
         ssim_avg = evaluator.state.metrics['ssim']
-        print(f'PSNR: {psnr_avg:.3f}db\nSSIM: {ssim_avg:.3f}')
+        print(f"""L1_val: {l1_avg:.3f}
+              \nPSNR: {psnr_avg:.3f}db
+              \nSSIM: {ssim_avg:.3f}
+              """)
 
         # log
         self.writer.add_scalar(tag = 'L1 Loss/Train_Step', scalar_value = lossL1_avg, global_step = current_step)
         self.writer.add_scalar(tag = 'G Loss/Train_Step', scalar_value = lossG_avg, global_step = current_step)
         self.writer.add_scalar(tag = 'D Loss/Train_Step', scalar_value = lossD_avg, global_step = current_step)
+        self.writer.add_scalar(tag='Metrics/L1', scalar_value = l1_avg, global_step = current_step)
         self.writer.add_scalar(tag='Metrics/PSNR', scalar_value = psnr_avg, global_step = current_step)
         self.writer.add_scalar(tag='Metrics/SSIM', scalar_value = ssim_avg, global_step = current_step)
 
@@ -159,10 +165,10 @@ class Trainer():
         #     if x.shape[1] > 3: return x[:, :3]  # Take first 3 channels if > 3 (e.g. RGB bands)
         #     return x
 
-        self.writer.add_image('Images/Fake', make_grid((fake)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/Real', make_grid((real)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/S2', make_grid((s2)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/LC', make_grid((lc)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/Fake', make_grid((denorm(fake))[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/Real', make_grid((denorm(real))[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/S2', make_grid((denorm(s2))[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/LC', make_grid((denorm(lc))[:n_imgs], nrow=4), current_step)
 
         # Check best ssim and save checkpoint
         is_best_ssim = ssim_avg > self.best_ssim
