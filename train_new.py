@@ -115,7 +115,7 @@ if __name__ == '__main__':
         try:
             device = torch.device(cfg_train['device'])
         except Exception as e:
-            print(f'Explain error.\nIn base_config, device: {cfg_train['device']}: {e}')
+            print(f'Explain error.\nIn yaml base_config, device: {cfg_train["device"]}: {e}')
             sys.exit(1)
 
     netG = Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1, features=64)
