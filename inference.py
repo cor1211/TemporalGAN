@@ -24,7 +24,7 @@ def load_config_file(config_path):
 
 def denorm(img: torch.Tensor):
     """
-    denorm from [-1, 1] to [0, 1]
+    Denorm from [-1, 1] to [0, 1]
     """
     img = (img * 0.5 + 0.5).clamp(0, 1)
     return img
@@ -47,7 +47,11 @@ if __name__ == '__main__':
     if not config_dict['device']:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
-        device = torch.device(f"{config_dict['device']}")
+        try:
+            device = torch.device(config_dict['device'])
+        except Exception as e:
+            print(f'Explain error.\nIn inference_config, device: {config_dict['device']}: {e}')
+            sys.exit(1)
 
 
     transform_rgb = Compose([

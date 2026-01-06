@@ -1,9 +1,7 @@
 import os
 import torch
 import sys
-# from datetime import datetime
 from tqdm import tqdm
-# from src import l1_loss, lratio_loss, psnr_torch, ssim_torch, gradient_loss
 from torch.nn import BCEWithLogitsLoss
 from torch.nn import L1Loss
 from ignite.metrics import PSNR, SSIM, Loss
@@ -61,6 +59,22 @@ class Trainer():
         self.loss_G = 0.0
         self.loss_l1 = 0.0
         self.loss_D = 0.0
+        
+        # Initialize Valid Engine
+        def eval_step(engine, batch):
+            self.netG.eval()
+            with torch.no_grad():
+                (s2, lc), s1 = batch
+                s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
+                s1_fake = self.netG(s2, lc)
+
+            return s1_fake, s1, s2, lc
+        
+        # Compute metrics of valid set
+        self.evaluator = Engine(eval_step)
+        Loss(self.criterion_L1, output_transform=lambda x: (x[0], x[1])).attach(self.evaluator, 'l1')
+        PSNR(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(self.evaluator, 'psnr')
+        SSIM(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(self.evaluator, 'ssim')
 
         if self.resume_path:
             self._load_checkpoint(resume_path)
@@ -111,42 +125,27 @@ class Trainer():
         """
         Process an validation by val_step
         """
-        def eval_step(engine, batch):
-            self.netG.eval()
-            with torch.no_grad():
-                (s2, lc), s1 = batch
-                s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
-                s1_fake = self.netG(s2, lc)
-
-            return s1_fake, s1, s2, lc
-        
-        # compute loss of train set
+        # Compute loss of train set
         lossG_avg = self.loss_G / self.val_step
         lossL1_avg = self.loss_l1 / self.val_step
         lossD_avg = self.loss_D / self.val_step
 
         print(f"""Step [{current_step}/{self.total_steps}]
-            \n{20 * '-'}
-            \nAverage Train L1 Loss: {lossL1_avg:.3f}
-            \nAverage Train G Loss: {lossG_avg:.3f}
-            \nAverage Train D Loss: {lossD_avg:.3f}
-            \n{20 * '-'}
-                """)
+            {20 * '-'}
+            Average Train L1 Loss: {lossL1_avg:.3f}
+            Average Train G Loss: {lossG_avg:.3f}
+            Average Train D Loss: {lossD_avg:.3f}
+            {20 * '-'}""")
         print(f'Start Validating...')
         
-        # compute metrics of valid set
-        evaluator = Engine(eval_step)
-        Loss(self.criterion_L1, output_transform=lambda x: (x[0], x[1])).attach(evaluator, 'l1')
-        PSNR(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(evaluator, 'psnr')
-        SSIM(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(evaluator, 'ssim')
-        evaluator.run(tqdm(self.valid_loader, desc="Validating", leave=False))
-        l1_avg = evaluator.state.metrics['l1']
-        psnr_avg = evaluator.state.metrics['psnr']
-        ssim_avg = evaluator.state.metrics['ssim']
-        print(f"""L1_val: {l1_avg:.3f}
-              \nPSNR: {psnr_avg:.3f}db
-              \nSSIM: {ssim_avg:.3f}
-              """)
+        
+        self.evaluator.run(tqdm(self.valid_loader, desc="Validating", leave=False))
+        l1_avg = self.evaluator.state.metrics['l1']
+        psnr_avg = self.evaluator.state.metrics['psnr']
+        ssim_avg = self.evaluator.state.metrics['ssim']
+        print(f"""{20*'-'}
+              L1_val: {l1_avg:.3f}\nPSNR: {psnr_avg:.3f}db\nSSIM: {ssim_avg:.3f}
+              {20*'-'}""")
 
         # log
         self.writer.add_scalar(tag = 'L1 Loss/Train_Step', scalar_value = lossL1_avg, global_step = current_step)
@@ -157,7 +156,7 @@ class Trainer():
         self.writer.add_scalar(tag='Metrics/SSIM', scalar_value = ssim_avg, global_step = current_step)
 
         # Log images
-        fake, real, s2, lc = evaluator.state.output
+        fake, real, s2, lc = self.evaluator.state.output
         n_imgs = min(8, fake.size(0))
         
         # def to_vis(x):
@@ -200,7 +199,7 @@ class Trainer():
         train_iter = iter(self.train_loader)
 
         pbar = tqdm(total=self.total_steps, initial=self.current_step, desc='Training')
-
+            
         #-----------------MAIN--------------------------
         while self.current_step < self.total_steps:
             
@@ -213,13 +212,12 @@ class Trainer():
 
             s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
             
-            # generate S1 fake
-            s1_fake = self.netG(s2, lc)
-
-
             #---------Start Training---------------
             self.netG.train()
             self.netD.train()
+            
+            # generate S1 fake
+            s1_fake = self.netG(s2, lc)
 
 
             #------------ Train Discriminator--------------

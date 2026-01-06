@@ -16,6 +16,7 @@ from trainer import Trainer
 import random
 import numpy as np
 
+
 def load_config(config_path: str):
     try:
         with open(Path(config_path), 'r') as file:
@@ -32,21 +33,23 @@ def set_seed(seed=42):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    torch.cuda.manual_seed_all(seed)    
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
 if __name__ == '__main__':
-    set_seed(42) # Set seed
     parser = ArgumentParser(prog="Model Training")
     parser.add_argument('--config_path', type=str, required=True)
-    
     args = parser.parse_args()
+
     #---------Load yaml file---------------
     config_dict = load_config(args.config_path)
     cfg_data = config_dict['data']
     cfg_train = config_dict['train']
+
+    #--------Set seed--------------
+    set_seed(cfg_train.get('seed', 42)) 
 
     #---------Load checkpoint---------------
     ckp_path = cfg_train['resume_path']
@@ -61,6 +64,7 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         run_name = f'exp_{datetime.now().strftime("%Y%m%d-%H%M%S")}'
+    
     
     #-----------Init Summary Writer to log-------------
     logdir = os.path.join('runs', run_name)
@@ -105,7 +109,15 @@ if __name__ == '__main__':
 
 
     #---------Configure model------------
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if not cfg_train['device']:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        try:
+            device = torch.device(cfg_train['device'])
+        except Exception as e:
+            print(f'Explain error.\nIn base_config, device: {cfg_train['device']}: {e}')
+            sys.exit(1)
+
     netG = Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1, features=64)
     netD = Discriminator(s2_in_channels=3, lc_in_channels=3, s1_out_channels=1)
     optG = Adam(netG.parameters(), lr = cfg_train['lr'], betas=tuple(cfg_train['betas']))
@@ -113,5 +125,5 @@ if __name__ == '__main__':
 
 
     #----------Train-----------
-    train = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, ckp_path)
-    train.run()
+    trainer = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, ckp_path)
+    trainer.run()
