@@ -1,0 +1,20 @@
+ckpt_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20251229-135551/best.pth
+dropout: True
+device: cpu
+new_size_lc: [256, 256]
+batch_infer:
+  action: True
+  batch_size: 16
+  image_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s/train
+  data_len: 2
+  input_folders: ['s2_256', 'lc_2048']
+  output_folders: s1_256_vv
+  save_dir: ./infer_trainset_results
+
+input: 
+  s2_path: /mnt/data1tb/vinh/triplet_s2_s1_lc_1manh_eval_SRSAR/cuted_s2/1_2_E_48_32_C_b_4_s2.png
+  lc_path: /mnt/data1tb/vinh/triplet_s2_s1_lc_1manh_eval_SRSAR/cuted_lc/1_2_E_48_32_C_b_4_lc.png
+
+output:
+  s1_path: 
+  save_dir: 

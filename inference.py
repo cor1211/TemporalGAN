@@ -1,5 +1,5 @@
 """
-Infer output with inputs {s2, lc}
+Infer s1 output with inputs {s2, lc}
 """
 
 from temporalgan.gen_s2_lc_v1_0 import Generator
@@ -87,7 +87,9 @@ if __name__ == '__main__':
 
         #-------Read input------------
         s2 = Image.open(cfg_input['s2_path']).convert('RGB')
-        lc = Image.open(cfg_input['lc_path']).convert('RGB').resize(size=(256,256), resample=Image.Resampling.BICUBIC)
+
+        lc = Image.open(cfg_input['lc_path']).convert('RGB')
+        lc = lc.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc
         s2_transformed, lc_transformed = transform_rgb(s2), transform_rgb(lc)
         s2_transformed = s2_transformed.unsqueeze(0).to(device) # Add batch dimens at first -> [B, C ,H, W]
         lc_transformed = lc_transformed.unsqueeze(0).to(device) #
@@ -138,10 +140,14 @@ if __name__ == '__main__':
 
         # Iteration 
         count = 0
+        batch_s2 = []
+        batch_lc = []
+        batch_img_name = []
+
         for image_name in tqdm(sorted(os.listdir(s2_folder_path))):
             os.makedirs(os.path.join(save_dir, image_name.replace('.png', '')), exist_ok = True)
             count += 1
-   
+
             # Path
             s2_path = os.path.join(s2_folder_path, image_name)
             lc_path = os.path.join(lc_folder_path, image_name)
@@ -149,26 +155,50 @@ if __name__ == '__main__':
 
             # Open image
             s2_img = Image.open(s2_path).convert('RGB')
-            lc_img = Image.open(lc_path).convert('RGB').resize(size=(256,256), resample=Image.Resampling.BICUBIC)
+            lc_img = Image.open(lc_path).convert('RGB')
+            lc_img = lc_img.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc_img            
             s1_img = Image.open(s1_path).convert('L') if s1_path else None
 
             s2_transformed, lc_transformed = transform_rgb(s2_img), transform_rgb(lc_img)
-            s2_transformed = s2_transformed.unsqueeze(0).to(device) # Add batch dimens at first -> [B, C ,H, W]
-            lc_transformed = lc_transformed.unsqueeze(0).to(device) #
             
             # Save
             s2_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 's2.png'))
             lc_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 'lc.png'))
             if s1_img:
                 s1_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 's1.png'))
+            
+            # Add to batch
+            batch_s2.append(s2_transformed)
+            batch_lc.append(lc_transformed)
+            batch_img_name.append(image_name)
+            
+            if len(batch_s2) < cfg_batch_infer['batch_size'] and count < total:
+                continue
 
             #-----------Infer----------
             with torch.no_grad():
-                s1_gen = netG(s2_transformed, lc_transformed) # Forward
-                # Denorm
-                s1_denormed = denorm(s1_gen.squeeze(0))
-                s1_pil = toPil(s1_denormed)
-                s1_pil.save(os.path.join(save_dir, image_name.replace('.png', ''), 's1_gen.png'))
+                # Convert list of tensors [C, H, W] to a tensor [B, C, H, W]
+                # Move batch to device here for better efficiency (reduce CPU-GPU communication overhead)
+                s2_tensor_batch = torch.stack(tensors=batch_s2, dim=0).to(device)
+                lc_tensor_batch = torch.stack(tensors=batch_lc, dim=0).to(device)
+                
+                # Forward
+                s1_gen_batch = netG(s2_tensor_batch, lc_tensor_batch)
+                
+                # Denorm output
+                s1_denormed_batch = denorm(s1_gen_batch).cpu() # Move to CPU once for the whole batch before converting to PIL
+                s1_pil_list = [toPil(s1_denormed.squeeze(0)) for s1_denormed in s1_denormed_batch.chunk(chunks=len(batch_s2), dim=0)]
+
+                #Save s1_gen
+                for i in range(len(s1_pil_list)):
+                    save_path = os.path.join(save_dir, batch_img_name[i].replace('.png', ''), 's1_gen.png')
+                    s1_pil_list[i].save(save_path)
+                    print(f'Saved at {save_path}')
+
+            # Reset
+            batch_s2 = []
+            batch_lc = []
+            batch_img_name = []
 
             if count >= total:
                 print(f'Successful infer [{count}/{total}]')
