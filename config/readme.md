@@ -1,0 +1,5 @@
+- base_config.yaml : Su dung de train (train_new.py)
+- inference_config.yaml: Su dung de infer 1 hoac 1 folder imgs (img nho: 256x256) (inference.py)
+- plot_config.yaml: Su dung de visualize theo nhom 4 anh: S2, LC, S1_Gen, S1_Real tu ket qua infer (plot/plot.py)
+- stitch_config.yaml: Su dung de infer 1 img lon', sau do thuc hien ghep anh de duoc kich thuoc ban dau (stitch.py)
+- matching_tif_files.txt: Chua file names 177 manh bo dataset fine-tine SR SAR. Dung de chay script infer ra SAR (dong vai tro laf SR-SAR)

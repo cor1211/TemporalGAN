@@ -1,0 +1,30 @@
+# Dataset config
+data:
+  root: '/mnt/data1tb/vinh/TemporalGAN/dataset/o2s_4'
+  train_batch_size: 12
+  valid_batch_size: 12
+  train_folder_name: 'train'
+  valid_folder_name: 'valid'
+  test_folder_name: 'test'
+  modalities: ['s1_256_vv', 's2_256', 'lc_2048']
+  num_workers: 2
+
+# Training config
+train:
+  device: cuda
+  seed: 42
+  total_epochs: 250
+  betas: [0.5, 0.999]
+  lr: 0.000001
+  val_step: 1000
+  lambda_l1: 100
+  resume_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20260126-090000/last.pth
+  strict_netG: True
+  strict_netD: True
+
+# Model architecture config
+model:
+  generator: gen_s2_lc_v1_1
+  discriminator: disc_s2_lc_v1_0
+
+

@@ -1,0 +1,8 @@
+whole_patch: 256
+overlap: 64
+device: cuda
+ckpt_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20251229-135551/best.pth
+
+dropout: infer_trainset_results
+s2_path: /mnt/data1tb/vinh/sgdm_340_manh/Sentinel-2/E_48_8_A_a_3.tif
+lc_path: /mnt/data1tb/vinh/sgdm_340_manh/LC_raster_tif_340/E_48_8_A_a_3_colored.tif

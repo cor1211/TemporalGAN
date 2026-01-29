@@ -1,9 +1,9 @@
-root_dir: /mnt/data1tb/vinh/TemporalGAN/infer_trainset_results
-modalities: ['lc.png', 's2.png', 's1_gen.png', 's1.png']
-quantity: 1
+root_dir: /mnt/data1tb/vinh/TemporalGAN/infer-srsar-results
+modalities: ['lc.png', 's2.png', 's1_gen.png']
+quantity: -1
 
 save:
-  action: False
-  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize_infer_trainset_results
+  action: True
+  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize_infer-srsar-results
 
-show: True
+show: False

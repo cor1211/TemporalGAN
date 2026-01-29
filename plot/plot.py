@@ -41,17 +41,21 @@ if __name__ == '__main__':
         if not os.path.isdir(subfolder_path):
             continue
         
-        images = [
-            os.path.join(subfolder_path, fn)
-            for fn in modalities
-            if fn.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ]
+        images = []
+        for fn in modalities:
+            if fn.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_path = os.path.join(subfolder_path, fn)
+                if os.path.exists(img_path):
+                    images.append(img_path)
 
-        if len(images) != 4:
-            print(f"Skip {subfolder}: is not enough 4 imgs")
+        if not images:
+            print(f"Skip {subfolder}: No images found")
             continue
 
-        fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+        n_imgs = len(images)
+        fig, axes = plt.subplots(1, n_imgs, figsize=(4 * n_imgs, 4))
+        if n_imgs == 1:
+            axes = [axes]
 
         for ax, img_path in zip(axes, images):
             img = Image.open(img_path).convert('RGB')
@@ -62,6 +66,7 @@ if __name__ == '__main__':
             ax.text(x = 0, y= -4, s = os.path.basename(img_path).replace('.png', ''), fontsize = 14)
         
         plt.title(subfolder)
+        # fig.suptitle(subfolder)
 
         # Setting
         plt.subplots_adjust(

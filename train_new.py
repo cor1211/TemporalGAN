@@ -1,5 +1,7 @@
-from temporalgan.gen_s2_lc_v1_0 import Generator
-from temporalgan.disc_s2_lc_v1_0 import Discriminator
+# from temporalgan.gen_s2_lc_v1_0 import Generator
+from temporalgan import gen_s2_lc_v1_0, gen_s2_lc_v1_1
+# from temporalgan.disc_s2_lc_v1_0 import Discriminator
+from temporalgan import disc_s2_lc_v1_0
 from dataset.o2s_dataset import O2SDataset
 from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, ToTensor, Normalize
@@ -15,6 +17,17 @@ from torch.utils.tensorboard import SummaryWriter
 from trainer import Trainer
 import random
 import numpy as np
+import os
+
+# Mapping from config model to Object
+GENERATORS = {
+    'gen_s2_lc_v1_0': gen_s2_lc_v1_0,
+    'gen_s2_lc_v1_1': gen_s2_lc_v1_1,
+}
+
+DISCRIMINATORS = {
+    'disc_s2_lc_v1_0': disc_s2_lc_v1_0
+}
 
 
 def load_config(config_path: str):
@@ -39,14 +52,17 @@ def set_seed(seed=42):
 
 
 if __name__ == '__main__':
+    torch.cuda.empty_cache()
+    # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:2048"
     parser = ArgumentParser(prog="Model Training")
-    parser.add_argument('--config_path', type=str, required=True)
+    parser.add_argument('--config_path', type=str, default='/mnt/data1tb/vinh/TemporalGAN/config/base_config.yaml')
     args = parser.parse_args()
 
     #---------Load yaml file---------------
     config_dict = load_config(args.config_path)
     cfg_data = config_dict['data']
     cfg_train = config_dict['train']
+    cfg_model = config_dict['model']
 
     #--------Set seed--------------
     set_seed(cfg_train.get('seed', 42)) 
@@ -118,12 +134,29 @@ if __name__ == '__main__':
             print(f'Explain error.\nIn yaml base_config, device: {cfg_train["device"]}: {e}')
             sys.exit(1)
 
-    netG = Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1, features=64)
-    netD = Discriminator(s2_in_channels=3, lc_in_channels=3, s1_out_channels=1)
+    # Validate and load generator and discriminator from config
+    gen_module_name = cfg_model['generator']
+    disc_module_name = cfg_model['discriminator']
+    
+    if gen_module_name not in GENERATORS:
+        raise ValueError(f"Generator '{gen_module_name}' not found. Available: {list(GENERATORS.keys())}")
+    
+    if disc_module_name not in DISCRIMINATORS:
+        raise ValueError(f"Discriminator '{disc_module_name}' not found. Available: {list(DISCRIMINATORS.keys())}")
+    
+    generator_module = GENERATORS[gen_module_name]
+    discriminator_module = DISCRIMINATORS[disc_module_name]
+
+    #--------------Initialize Models---------------
+    netG = generator_module.Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1, features=64)
+    netD = discriminator_module.Discriminator(s2_in_channels=3, lc_in_channels=3, s1_out_channels=1)
     optG = Adam(netG.parameters(), lr = cfg_train['lr'], betas=tuple(cfg_train['betas']))
     optD = Adam(netD.parameters(), lr = cfg_train['lr'], betas=tuple(cfg_train['betas']))
 
 
     #----------Train-----------
-    trainer = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, ckp_path)
+    trainer = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, 
+                      resume_path=ckp_path, 
+                      strict_netG=cfg_train['strict_netG'],
+                      strict_netD=cfg_train['strict_netD'])
     trainer.run()

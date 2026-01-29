@@ -14,7 +14,7 @@ def denorm(x):
     return (x * 0.5 + 0.5).clamp(0, 1)
 
 class Trainer():
-    def __init__(self, netG, netD, optG, optD, train_loader, valid_loader, device, config, writer, run_name, resume_path = None, kaggle = None):
+    def __init__(self, netG, netD, optG, optD, train_loader, valid_loader, device, config, writer, run_name, resume_path = None, kaggle = None, strict_netG = True, strict_netD = True):
         # Config
         self.config = config
         self.train_cfg = self.config['train']
@@ -40,7 +40,9 @@ class Trainer():
 
         self.total_steps = self.total_epochs * self.num_iter_train
         
-        # log, checkpoint
+        # Log, checkpoint
+        self.strict_netG = strict_netG
+        self.strict_netD = strict_netD
         self.writer = writer
         self.resume_path =resume_path
         self.run_name = run_name
@@ -84,10 +86,20 @@ class Trainer():
         try:
             # Load checkpoint
             checkpoint = torch.load(Path(resume_path))
-            self.netG.load_state_dict(checkpoint['netG_state_dict'])
-            self.netD.load_state_dict(checkpoint['netD_state_dict'])
-            self.optG.load_state_dict(checkpoint['optG_state_dict'])
-            self.optD.load_state_dict(checkpoint['optD_state_dict'])
+            self.netG.load_state_dict(checkpoint['netG_state_dict'], strict=self.strict_netG)
+            self.netD.load_state_dict(checkpoint['netD_state_dict'], strict=self.strict_netD)
+            
+            # Only load optimizer state if models were loaded with strict=True
+            # When strict=False, model architecture may differ, causing optimizer mismatch
+            if self.strict_netG and self.strict_netD:
+                try:
+                    self.optG.load_state_dict(checkpoint['optG_state_dict'])
+                    self.optD.load_state_dict(checkpoint['optD_state_dict'])
+                except Exception as opt_e:
+                    print(f"Warning: Could not load optimizer state: {opt_e}.")
+                    sys.exit(1)
+            else:
+                print("Note: Skipping optimizer state loading because model was loaded with strict=False")
 
             self.current_step = checkpoint['step']
             self.best_ssim = checkpoint.get('best_ssim', 0.0)
@@ -112,11 +124,18 @@ class Trainer():
         # Save last checkpoint
         last_save_path = os.path.join(self.checkpoint_dir, 'last.pth')
         torch.save(checkpoint_data, last_save_path)
+        step_save_path = os.path.join(self.checkpoint_dir, f'{step}.pth')
+        torch.save(checkpoint_data, step_save_path)
 
         # Save best checkpoint
         if is_best:
-            best_save_path = os.path.join(self.checkpoint_dir, 'best.pth')
+            best_save_path = os.path.join(self.checkpoint_dir, f'{step}-ssim_{self.best_ssim:.4f}.pth')
             torch.save(checkpoint_data, best_save_path)
+            
+            # Save as fixed name 'best.pth' for easier loading in inference
+            best_fixed_path = os.path.join(self.checkpoint_dir, 'best.pth')
+            torch.save(checkpoint_data, best_fixed_path)
+            
             print(f"Step {step}: New best model saved to {best_save_path}")
     
 
@@ -131,11 +150,11 @@ class Trainer():
         lossD_avg = self.loss_D / self.val_step
 
         print(f"""Step [{current_step}/{self.total_steps}]
-            {20 * '-'}
-            Average Train L1 Loss: {lossL1_avg:.3f}
-            Average Train G Loss: {lossG_avg:.3f}
-            Average Train D Loss: {lossD_avg:.3f}
-            {20 * '-'}""")
+{20 * '-'}
+Average Train L1 Loss: {lossL1_avg:.3f}
+Average Train G Loss: {lossG_avg:.3f}
+Average Train D Loss: {lossD_avg:.3f}
+{20 * '-'}""")
         print(f'Start Validating...')
         
         
@@ -144,8 +163,8 @@ class Trainer():
         psnr_avg = self.evaluator.state.metrics['psnr']
         ssim_avg = self.evaluator.state.metrics['ssim']
         print(f"""{20*'-'}
-              L1_val: {l1_avg:.3f}\nPSNR: {psnr_avg:.3f}db\nSSIM: {ssim_avg:.3f}
-              {20*'-'}""")
+L1_val: {l1_avg:.3f}\nPSNR: {psnr_avg:.3f}db\nSSIM: {ssim_avg:.3f}
+{20*'-'}""")
 
         # log
         self.writer.add_scalar(tag = 'L1 Loss/Train_Step', scalar_value = lossL1_avg, global_step = current_step)
@@ -220,7 +239,7 @@ class Trainer():
             s1_fake = self.netG(s2, lc)
 
 
-            #------------ Train Discriminator--------------
+            #------------Train Discriminator--------------
             for param in self.netD.parameters():
                 param.requires_grad = True
             
