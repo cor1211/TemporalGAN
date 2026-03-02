@@ -1,8 +1,8 @@
 # Dataset config
 data:
   root: '/mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited'
-  train_batch_size: 12
-  valid_batch_size: 12
+  train_batch_size: 16
+  valid_batch_size: 16
   train_folder_name: 'train/triplet_vh'
   valid_folder_name: 'valid/triplet_vh'
   test_folder_name: 'test/triplet_vh'
@@ -18,7 +18,8 @@ train:
   lr: 0.000001
   val_step: 1000
   lambda_l1: 100
-  resume_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20260126-090000/last.pth
+  grad_clip_norm: 1.0
+  resume_path: 
   strict_netG: True
   strict_netD: True
 

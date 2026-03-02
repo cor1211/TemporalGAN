@@ -4,7 +4,7 @@ from temporalgan import gen_s2_lc_v1_0, gen_s2_lc_v1_1
 from temporalgan import disc_s2_lc_v1_0
 from dataset.o2s_dataset import O2SDataset
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, ToTensor, Normalize
+from torchvision.transforms import Compose, Normalize
 import sys
 from pathlib import Path
 import yaml
@@ -17,7 +17,6 @@ from torch.utils.tensorboard import SummaryWriter
 from trainer import Trainer
 import random
 import numpy as np
-import os
 
 # Mapping from config model to Object
 GENERATORS = {
@@ -53,9 +52,9 @@ def set_seed(seed=42):
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
-    # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:2048"
     parser = ArgumentParser(prog="Model Training")
     parser.add_argument('--config_path', type=str, default='/mnt/data1tb/vinh/TemporalGAN/config/base_config.yaml')
+    parser.add_argument('--use_wandb', action='store_true', help='Enable Weights & Biases logging')
     args = parser.parse_args()
 
     #---------Load yaml file---------------
@@ -85,13 +84,31 @@ if __name__ == '__main__':
     #-----------Init Summary Writer to log-------------
     logdir = os.path.join('runs', run_name)
     os.makedirs(logdir, exist_ok=True)
-    writer = SummaryWriter(log_dir = logdir)
+    writer = SummaryWriter(log_dir=logdir)
     print(f'TensorBoard logs will be saved in {logdir}')
+
+    #-----------Init WandB (optional)------------------
+    use_wandb = args.use_wandb
+    if use_wandb:
+        try:
+            import wandb
+            wandb.init(
+                project="TemporalGAN-O2S",
+                name=run_name,
+                config=config_dict,
+            )
+            print(f'WandB initialized: project=TemporalGAN-O2S, run={run_name}')
+        except ImportError:
+            print("Warning: wandb not installed. Falling back to TensorBoard only.")
+            use_wandb = False
+        except Exception as e:
+            print(f"Warning: wandb init failed: {e}. Falling back to TensorBoard only.")
+            use_wandb = False
 
 
     #-------------Dataset, Dataloader-----------
     transform_RGB = Compose(transforms=[
-        Normalize(mean=[0.5, 0.5, 0.5], std = [0.5, 0.5, 0.5])
+        Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
     transform_gray = Compose(transforms=[
@@ -99,7 +116,7 @@ if __name__ == '__main__':
     ])
 
         #------Dataset--------------
-    train_set = O2SDataset(train=True, transform_rgb=transform_RGB, transform_gray= transform_gray, cfg_data=cfg_data)
+    train_set = O2SDataset(train=True, transform_rgb=transform_RGB, transform_gray=transform_gray, cfg_data=cfg_data)
     valid_set = O2SDataset(valid=True, transform_rgb=transform_RGB, transform_gray=transform_gray, cfg_data=cfg_data)
     test_set = O2SDataset(test=True, transform_rgb=transform_RGB, transform_gray=transform_gray, cfg_data=cfg_data)
 
@@ -148,13 +165,14 @@ if __name__ == '__main__':
     #--------------Initialize Models---------------
     netG = generator_module.Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1, features=64)
     netD = discriminator_module.Discriminator(s2_in_channels=3, lc_in_channels=3, s1_out_channels=1)
-    optG = Adam(netG.parameters(), lr = cfg_train['lr'], betas=tuple(cfg_train['betas']))
-    optD = Adam(netD.parameters(), lr = cfg_train['lr'], betas=tuple(cfg_train['betas']))
+    optG = Adam(netG.parameters(), lr=cfg_train['lr'], betas=tuple(cfg_train['betas']))
+    optD = Adam(netD.parameters(), lr=cfg_train['lr'], betas=tuple(cfg_train['betas']))
 
 
     #----------Train-----------
     trainer = Trainer(netG, netD, optG, optD, train_loader, valid_loader, device, config_dict, writer, run_name, 
                       resume_path=ckp_path, 
                       strict_netG=cfg_train['strict_netG'],
-                      strict_netD=cfg_train['strict_netD'])
+                      strict_netD=cfg_train['strict_netD'],
+                      use_wandb=use_wandb)
     trainer.run()
