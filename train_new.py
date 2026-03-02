@@ -91,12 +91,10 @@ if __name__ == '__main__':
 
     #-------------Dataset, Dataloader-----------
     transform_RGB = Compose(transforms=[
-        ToTensor(),
         Normalize(mean=[0.5, 0.5, 0.5], std = [0.5, 0.5, 0.5])
     ])
 
     transform_gray = Compose(transforms=[
-        ToTensor(),
         Normalize(mean=[0.5], std=[0.5])
     ])
 
