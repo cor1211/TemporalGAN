@@ -1,9 +1,9 @@
-root_dir: /mnt/data1tb/vinh/TemporalGAN/infer-srsar-results
+root_dir: /mnt/data1tb/vinh/benchmark_SRSAR/SAR5m-GT/F_48_93_B_b_4
 modalities: ['lc.png', 's2.png', 's1_gen.png']
 quantity: -1
 
 save:
   action: True
-  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize_infer-srsar-results
+  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize-SAR5m-GT/F_48_93_B_b_4
 
 show: False

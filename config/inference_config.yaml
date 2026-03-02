@@ -6,25 +6,25 @@ new_size_lc:
 batch_infer:
   action: True
   batch_size: 16
-  image_folder_path: /mnt/data1tb/vinh/data_tumlum
+  s2_folder_path: /mnt/data1tb/vinh/swin2-mose/output_x2/F_48_93_B_b_4
+  lc_folder_path: /mnt/data1tb/vinh/swin2-mose/data_croped/O2S_Inference/LandCover/F_48_93_B_b_4
+  s1_folder_path: 
   data_len: -1
-  input_folders: ['s2_5_256_340sgdm', 'lc_5_256_340sgdm']
-  output_folders: 
-  save_dir: ./infer-sr-results-v1_1
-  whitelist_path: /mnt/data1tb/vinh/TemporalGAN/config/matching_tif_files.txt
-  save_png: False
+  save_dir: /mnt/data1tb/vinh/benchmark_SRSAR/SAR5m-GT/F_48_93_B_b_4
+  whitelist_path: 
+  save_png: True
   save_raw:
     enabled: True  # Save raw tensor/numpy output for downstream training
     format: npy     # Options: 'pt' (PyTorch), 'npy' (NumPy), 'npz' (NumPy compressed)
     save_denormed: False  # False: keep original [-1,1] range, True: denorm to [0,1]
 
 input: 
-  s2_path: /mnt/data1tb/vinh/swin2-mose/swin2_mose_model/result_x2.png
-  lc_path: /mnt/data1tb/vinh/triplet_s2_s1_lc_1manh_eval_SRSAR/cuted_lc/0_2_E_48_32_C_b_4_lc.png
+  s2_path: /mnt/data1tb/vinh/swin2-mose/output_x2/F_48_70_A_c_2_0_32_x2.png
+  lc_path: /mnt/data1tb/vinh/swin2-mose/data_croped/O2S_Inference/LandCover/F_48_70_A_c_2_colored_0_256.png
 
 output:
   s1_path: # Ground Truth. Visualize GT to compare to S1_Gen
-  save_dir: 
+  save_dir: trash
 
 # Model architecture config
 model:

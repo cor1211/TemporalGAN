@@ -181,14 +181,12 @@ if __name__ == '__main__':
         os.makedirs(save_dir, exist_ok=True) # Make folder to save
 
     
-        folder_path = cfg_batch_infer['image_folder_path']
-        if not folder_path:
-            raise ValueError(f'In yaml inference_config, image_folder_path: "{folder_path}" - null')
+        s2_folder_path = cfg_batch_infer.get('s2_folder_path')
+        lc_folder_path = cfg_batch_infer.get('lc_folder_path')
+        if not s2_folder_path or not lc_folder_path:
+            raise ValueError('In yaml inference_config, both s2_folder_path and lc_folder_path must be specified')
 
-        # Path to input folders
-        s2_folder_path = os.path.join(folder_path, cfg_batch_infer['input_folders'][0])
-        lc_folder_path = os.path.join(folder_path, cfg_batch_infer['input_folders'][1])
-        s1_folder_path = os.path.join(folder_path, cfg_batch_infer['output_folders']) if cfg_batch_infer['output_folders'] else None
+        s1_folder_path = cfg_batch_infer.get('s1_folder_path')
 
         # --- Whitelist Logic ---
         all_s2_images = sorted(os.listdir(s2_folder_path))

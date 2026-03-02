@@ -39,14 +39,14 @@ def count_quantity_file(source_data, black_list:list):
     
 def split_train_test(train_percent, valid_percent, source_data, target_data, black_list):
     # test_percent = 1 - train_percent - valid_percent
-    MODALTITES = ['s1_256_vvv', 's2_256', 'lc_2048']
+    MODALTITES = ['s1_256_vv', 's2_256', 'lc_2048']
 
     # create folders
     for split in ['train', 'test', 'valid']:
         for m in MODALTITES:
             os.makedirs(os.path.join(target_data, split, m), exist_ok=True)
     
-    # collect images by sample
+    # Collect images by sample
     samples = defaultdict(dict)
     for m in MODALTITES:
         folder = os.path.join(source_data, m)
@@ -109,8 +109,8 @@ if __name__ == '__main__':
     random.seed(42)
     BLACK_LIST_PATH = '/mnt/data1tb/vinh/TemporalGAN/dataset/o2s/not_corresponding_dimens.txt'
     black_list = load_black_list(BLACK_LIST_PATH)
-    source_data = '/mnt/data1tb/vinh/s2_s1_lc_O2S'
-    target_data = '/mnt/data1tb/vinh/TemporalGAN/dataset/o2s'
+    source_data = '/mnt/data1tb/vinh/s2_s1_lc_O2S_2'
+    target_data = '/mnt/data1tb/vinh/TemporalGAN/dataset/o2s_2'
 
     split_train_test(train_percent=0.7, valid_percent=0.2, source_data=source_data, target_data=target_data, black_list=black_list)
 
