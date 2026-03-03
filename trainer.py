@@ -4,11 +4,9 @@ import sys
 from tqdm import tqdm
 from torch.nn import MSELoss   # LSGAN objective
 from torch.nn import L1Loss
-from ignite.metrics import PSNR, SSIM, Loss
-from ignite.engine import Engine
 from torchvision.utils import make_grid
 from pathlib import Path
-import lpips
+import math
 
 try:
     import wandb
@@ -75,24 +73,8 @@ class Trainer():
         self.scaler = torch.amp.GradScaler('cuda')
         self.grad_clip_norm = self.train_cfg.get('grad_clip_norm', 1.0)
 
-        # ===== LPIPS =====
-        self.lpips_fn = lpips.LPIPS(net='alex').to(self.device)
-        self.lpips_fn.eval()  # Always in eval mode
-        
-        # ===== Initialize Validation Engine =====
-        def eval_step(engine, batch):
-            self.netG.eval()
-            with torch.no_grad():
-                (s2, lc), s1 = batch
-                s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
-                s1_fake = self.netG(s2, lc)
-            return s1_fake, s1, s2, lc
-        
-        # Attach metrics (PSNR/SSIM on denormed [0,1] range)
-        self.evaluator = Engine(eval_step)
-        Loss(self.criterion_L1, output_transform=lambda x: (x[0], x[1])).attach(self.evaluator, 'l1')
-        PSNR(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(self.evaluator, 'psnr')
-        SSIM(data_range=1.0, output_transform=lambda x: (denorm(x[0]), denorm(x[1]))).attach(self.evaluator, 'ssim')
+        # ===== LPIPS (lazy-loaded during validation to save VRAM) =====
+        self.lpips_fn = None
 
         if self.resume_path:
             self._load_checkpoint(resume_path)
@@ -161,30 +143,12 @@ class Trainer():
         
         if not is_best_ssim and not is_best_lpips:
             print(f"  💾 Latest checkpoint saved at step {step}")
-    
-
-    def _compute_lpips(self):
-        """Compute LPIPS on the entire validation set."""
-        self.netG.eval()
-        lpips_total = 0.0
-        lpips_count = 0
-        with torch.no_grad():
-            for batch in self.valid_loader:
-                (s2, lc), s1 = batch
-                s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
-                s1_fake = self.netG(s2, lc)
-                # LPIPS expects [-1, 1] and 3 channels; repeat grayscale → 3ch
-                s1_3ch = s1.repeat(1, 3, 1, 1)
-                s1_fake_3ch = s1_fake.repeat(1, 3, 1, 1)
-                lpips_val = self.lpips_fn(s1_3ch, s1_fake_3ch).mean()
-                lpips_total += lpips_val.item() * s1.size(0)
-                lpips_count += s1.size(0)
-        return lpips_total / max(lpips_count, 1)
 
 
     def _validate_step(self, current_step):
         """
-        Run validation: compute metrics, log everything, and save checkpoints.
+        Single-pass validation: compute L1, PSNR, SSIM, LPIPS in one loop.
+        LPIPS model is lazy-loaded to CPU/GPU only during validation, then freed.
         """
         # Average train losses since last validation
         lossG_avg = self.loss_G / self.val_step
@@ -198,15 +162,73 @@ Average Train G Loss: {lossG_avg:.3f}
 Average Train D Loss: {lossD_avg:.3f}
 {20 * '-'}""")
         print(f'Start Validating...')
-        
-        # Run Ignite evaluator for L1, PSNR, SSIM
-        self.evaluator.run(tqdm(self.valid_loader, desc="Validating", leave=False))
-        l1_avg = self.evaluator.state.metrics['l1']
-        psnr_avg = self.evaluator.state.metrics['psnr']
-        ssim_avg = self.evaluator.state.metrics['ssim']
 
-        # Compute LPIPS separately
-        lpips_avg = self._compute_lpips()
+        self.netG.eval()
+        
+        # Lazy-load LPIPS model
+        import lpips as lpips_lib
+        lpips_fn = lpips_lib.LPIPS(net='alex').to(self.device)
+        lpips_fn.eval()
+
+        # Accumulators
+        l1_total = 0.0
+        psnr_total = 0.0
+        ssim_total = 0.0
+        lpips_total = 0.0
+        num_samples = 0
+        last_fake = None
+        last_real = None
+        last_s2 = None
+        last_lc = None
+
+        with torch.no_grad():
+            with torch.amp.autocast('cuda'):
+                for batch in tqdm(self.valid_loader, desc="Validating", leave=False):
+                    (s2, lc), s1 = batch
+                    s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
+                    s1_fake = self.netG(s2, lc)
+                    
+                    bs = s1.size(0)
+
+                    # --- L1 ---
+                    l1_val = self.criterion_L1(s1_fake, s1).item()
+                    l1_total += l1_val * bs
+
+                    # --- PSNR & SSIM (on denormed [0,1]) ---
+                    fake_dn = denorm(s1_fake)
+                    real_dn = denorm(s1)
+                    
+                    # PSNR: per-sample, then average
+                    mse_per_sample = ((fake_dn - real_dn) ** 2).view(bs, -1).mean(dim=1)
+                    psnr_per_sample = 10.0 * torch.log10(1.0 / (mse_per_sample + 1e-8))
+                    psnr_total += psnr_per_sample.sum().item()
+
+                    # SSIM: structural similarity (simplified per-batch)
+                    ssim_val = self._compute_ssim_batch(fake_dn, real_dn)
+                    ssim_total += ssim_val * bs
+
+                    # --- LPIPS (needs 3ch, [-1,1]) ---
+                    s1_3ch = s1.repeat(1, 3, 1, 1)
+                    s1_fake_3ch = s1_fake.repeat(1, 3, 1, 1)
+                    lpips_val = lpips_fn(s1_3ch, s1_fake_3ch).mean().item()
+                    lpips_total += lpips_val * bs
+
+                    num_samples += bs
+                    
+                    # Keep last batch for image logging (move to CPU immediately)
+                    last_fake = s1_fake[:8].cpu()
+                    last_real = s1[:8].cpu()
+                    last_s2 = s2[:8].cpu()
+                    last_lc = lc[:8].cpu()
+
+        # Free LPIPS model immediately after validation
+        del lpips_fn
+        torch.cuda.empty_cache()
+
+        l1_avg = l1_total / num_samples
+        psnr_avg = psnr_total / num_samples
+        ssim_avg = ssim_total / num_samples
+        lpips_avg = lpips_total / num_samples
 
         print(f"""{20*'-'}
 L1_val: {l1_avg:.3f}
@@ -225,12 +247,11 @@ LPIPS: {lpips_avg:.4f}
         self.writer.add_scalar(tag='Metrics/LPIPS', scalar_value=lpips_avg, global_step=current_step)
 
         # Log images to TensorBoard
-        fake, real, s2, lc = self.evaluator.state.output
-        n_imgs = min(8, fake.size(0))
-        self.writer.add_image('Images/Fake', make_grid(denorm(fake)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/Real', make_grid(denorm(real)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/S2', make_grid(denorm(s2)[:n_imgs], nrow=4), current_step)
-        self.writer.add_image('Images/LC', make_grid(denorm(lc)[:n_imgs], nrow=4), current_step)
+        n_imgs = min(8, last_fake.size(0))
+        self.writer.add_image('Images/Fake', make_grid(denorm(last_fake)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/Real', make_grid(denorm(last_real)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/S2', make_grid(denorm(last_s2)[:n_imgs], nrow=4), current_step)
+        self.writer.add_image('Images/LC', make_grid(denorm(last_lc)[:n_imgs], nrow=4), current_step)
 
         # ===== WandB Logging =====
         if self.use_wandb:
@@ -243,13 +264,13 @@ LPIPS: {lpips_avg:.4f}
                 'val/SSIM': ssim_avg,
                 'val/LPIPS': lpips_avg,
             }, step=current_step)
-            # Log images to WandB
+            # Log images to WandB (already on CPU)
             wandb.log({
                 'images': [
-                    wandb.Image(make_grid(denorm(fake)[:n_imgs], nrow=4), caption='Fake S1'),
-                    wandb.Image(make_grid(denorm(real)[:n_imgs], nrow=4), caption='Real S1'),
-                    wandb.Image(make_grid(denorm(s2)[:n_imgs], nrow=4), caption='S2 Input'),
-                    wandb.Image(make_grid(denorm(lc)[:n_imgs], nrow=4), caption='LC Input'),
+                    wandb.Image(make_grid(denorm(last_fake)[:n_imgs], nrow=4), caption='Fake S1'),
+                    wandb.Image(make_grid(denorm(last_real)[:n_imgs], nrow=4), caption='Real S1'),
+                    wandb.Image(make_grid(denorm(last_s2)[:n_imgs], nrow=4), caption='S2 Input'),
+                    wandb.Image(make_grid(denorm(last_lc)[:n_imgs], nrow=4), caption='LC Input'),
                 ]
             }, step=current_step)
 
@@ -270,6 +291,33 @@ LPIPS: {lpips_avg:.4f}
         self.loss_l1 = 0.0
 
 
+    @staticmethod
+    def _compute_ssim_batch(img1, img2, window_size=11, C1=0.01**2, C2=0.03**2):
+        """Compute SSIM between two batches of images. Returns average SSIM."""
+        # Gaussian window
+        channels = img1.size(1)
+        coords = torch.arange(window_size, dtype=torch.float32, device=img1.device) - window_size // 2
+        g = torch.exp(-(coords ** 2) / (2 * 1.5 ** 2))
+        g = g / g.sum()
+        window = g.unsqueeze(0) * g.unsqueeze(1)  # 2D gaussian
+        window = window.unsqueeze(0).unsqueeze(0).repeat(channels, 1, 1, 1)
+        
+        pad = window_size // 2
+        mu1 = torch.nn.functional.conv2d(img1, window, padding=pad, groups=channels)
+        mu2 = torch.nn.functional.conv2d(img2, window, padding=pad, groups=channels)
+        
+        mu1_sq = mu1 ** 2
+        mu2_sq = mu2 ** 2
+        mu12 = mu1 * mu2
+        
+        sigma1_sq = torch.nn.functional.conv2d(img1 * img1, window, padding=pad, groups=channels) - mu1_sq
+        sigma2_sq = torch.nn.functional.conv2d(img2 * img2, window, padding=pad, groups=channels) - mu2_sq
+        sigma12 = torch.nn.functional.conv2d(img1 * img2, window, padding=pad, groups=channels) - mu12
+        
+        ssim_map = ((2 * mu12 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+        return ssim_map.mean().item()
+
+
     def run(self):
         if not self.resume_path:
             print(f"""--------------------
@@ -284,92 +332,110 @@ LPIPS: {lpips_avg:.4f}
         pbar = tqdm(total=self.total_steps, initial=self.current_step, desc='Training')
             
         #-----------------MAIN TRAINING LOOP--------------------------
-        while self.current_step < self.total_steps:
-            
+        try:
+            while self.current_step < self.total_steps:
+                
+                try:
+                    (s2, lc), s1 = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(self.train_loader)
+                    (s2, lc), s1 = next(train_iter)
+
+                s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
+                
+                self.netG.train()
+                self.netD.train()
+
+                # ============ Train Discriminator ============
+                for param in self.netD.parameters():
+                    param.requires_grad = True
+                
+                self.optD.zero_grad()
+
+                with torch.amp.autocast('cuda'):
+                    # Generate fake
+                    s1_fake = self.netG(s2, lc)
+                    
+                    # D on fake
+                    D_fake_output = self.netD(s2, lc, s1_fake.detach()).float()
+                    D_fake_loss = self.criterion_GAN(D_fake_output, torch.zeros_like(D_fake_output))
+                    
+                    # D on real
+                    D_real_output = self.netD(s2, lc, s1).float()
+                    D_real_loss = self.criterion_GAN(D_real_output, torch.ones_like(D_real_output))
+
+                    D_losses = (D_fake_loss + D_real_loss) / 2
+
+                self.scaler.scale(D_losses).backward()
+                self.scaler.unscale_(self.optD)
+                torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.grad_clip_norm)
+                self.scaler.step(self.optD)
+
+
+                # ============ Train Generator ============
+                for param in self.netD.parameters():
+                    param.requires_grad = False
+                
+                self.optG.zero_grad()
+
+                with torch.amp.autocast('cuda'):
+                    D_fake_output = self.netD(s2, lc, s1_fake).float()
+                    G_gan_loss = self.criterion_GAN(D_fake_output, torch.ones_like(D_fake_output))
+                    G_l1_loss = self.criterion_L1(s1_fake.float(), s1.float())
+                    G_total_loss = self.lambda_l1 * G_l1_loss + G_gan_loss
+
+                self.scaler.scale(G_total_loss).backward()
+                self.scaler.unscale_(self.optG)
+                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.grad_clip_norm)
+                self.scaler.step(self.optG)
+
+                # Update scaler once per iteration (after both D and G steps)
+                self.scaler.update()
+
+
+                # ============ Logging ============
+                self.loss_G += G_gan_loss.item()
+                self.loss_l1 += G_l1_loss.item()
+                self.loss_D += D_losses.item()
+
+                pbar.set_postfix({
+                    'D': f'{D_losses.item():.3f}',
+                    'G': f'{G_gan_loss.item():.3f}',
+                    'L1': f'{G_l1_loss.item():.3f}'
+                })
+                
+                # Step-level WandB logging (every 10 steps)
+                if self.use_wandb and self.current_step % 10 == 0:
+                    wandb.log({
+                        'train_step/loss_G': G_gan_loss.item(),
+                        'train_step/loss_D': D_losses.item(),
+                        'train_step/loss_L1': G_l1_loss.item(),
+                    }, step=self.current_step)
+
+                self.current_step += 1
+                pbar.update(1)
+
+
+                # ============ Validate ============
+                if self.current_step % self.val_step == 0:
+                    torch.cuda.empty_cache()
+                    self._validate_step(self.current_step)
+                    torch.cuda.empty_cache()
+
+        except Exception as e:
+            print(f"\nCRITICAL ERROR in training loop at step {self.current_step}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Emergency checkpoint save
             try:
-                (s2, lc), s1 = next(train_iter)
-            except StopIteration:
-                train_iter = iter(self.train_loader)
-                (s2, lc), s1 = next(train_iter)
+                self._save_checkpoint(self.current_step, False, False)
+                print("Emergency checkpoint saved.")
+            except:
+                pass
+            sys.exit(1)
 
-            s2, lc, s1 = s2.to(self.device), lc.to(self.device), s1.to(self.device)
-            
-            self.netG.train()
-            self.netD.train()
-
-            # ============ Train Discriminator ============
-            for param in self.netD.parameters():
-                param.requires_grad = True
-            
-            self.optD.zero_grad()
-
-            with torch.amp.autocast('cuda'):
-                # Generate fake
-                s1_fake = self.netG(s2, lc)
-                
-                # D on fake
-                D_fake_output = self.netD(s2, lc, s1_fake.detach()).float()
-                D_fake_loss = self.criterion_GAN(D_fake_output, torch.zeros_like(D_fake_output))
-                
-                # D on real
-                D_real_output = self.netD(s2, lc, s1).float()
-                D_real_loss = self.criterion_GAN(D_real_output, torch.ones_like(D_real_output))
-
-                D_losses = (D_fake_loss + D_real_loss) / 2
-
-            self.scaler.scale(D_losses).backward()
-            self.scaler.unscale_(self.optD)
-            torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.grad_clip_norm)
-            self.scaler.step(self.optD)
-
-
-            # ============ Train Generator ============
-            for param in self.netD.parameters():
-                param.requires_grad = False
-            
-            self.optG.zero_grad()
-
-            with torch.amp.autocast('cuda'):
-                D_fake_output = self.netD(s2, lc, s1_fake).float()
-                G_gan_loss = self.criterion_GAN(D_fake_output, torch.ones_like(D_fake_output))
-                G_l1_loss = self.criterion_L1(s1_fake.float(), s1.float())
-                G_total_loss = self.lambda_l1 * G_l1_loss + G_gan_loss
-
-            self.scaler.scale(G_total_loss).backward()
-            self.scaler.unscale_(self.optG)
-            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.grad_clip_norm)
-            self.scaler.step(self.optG)
-
-            # Update scaler once per iteration (after both D and G steps)
-            self.scaler.update()
-
-
-            # ============ Logging ============
-            self.loss_G += G_gan_loss.item()
-            self.loss_l1 += G_l1_loss.item()
-            self.loss_D += D_losses.item()
-
-            pbar.set_postfix({
-                'D': f'{D_losses.item():.3f}',
-                'G': f'{G_gan_loss.item():.3f}',
-                'L1': f'{G_l1_loss.item():.3f}'
-            })
-            
-            # Step-level WandB logging (every 10 steps) to update dashboard immediately
-            if self.use_wandb and self.current_step % 10 == 0:
-                wandb.log({
-                    'train_step/loss_G': G_gan_loss.item(),
-                    'train_step/loss_D': D_losses.item(),
-                    'train_step/loss_L1': G_l1_loss.item(),
-                }, step=self.current_step)
-
-            self.current_step += 1
-            pbar.update(1)
-
-
-            # ============ Validate ============
-            if self.current_step % self.val_step == 0:
-                self._validate_step(self.current_step)
+        finally:
+            pbar.close()
 
         self.writer.close()
         if self.use_wandb:
