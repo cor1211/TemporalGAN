@@ -64,6 +64,28 @@ def denorm(img: torch.Tensor):
     return img
 
 
+def load_npy_as_tensor(path, is_s1=False):
+    """
+    Mirror the formatting logic from o2s_dataset.py exactly
+    """
+    arr = np.load(path)
+    
+    # 2. Ensure Arrays have C channel to prepare for transformations (H, W, C)
+    if arr.ndim == 2:
+        arr = np.expand_dims(arr, axis=-1)
+        
+    # 4. Extract required features for SAR
+    if is_s1 and arr.shape[-1] > 1:
+        arr = arr[..., 0:1]
+        
+    # 5. Convert to PyTorch Tensors
+    tensor = torch.from_numpy(arr).float()
+    
+    # 6. Change axis from HWC -> CHW
+    tensor = tensor.permute(2, 0, 1)
+    return tensor
+
+
 def enable_dropout(module):
     if isinstance(module, nn.Dropout):
         module.train()
@@ -116,12 +138,17 @@ if __name__ == '__main__':
             sys.exit(1)
 
     #---------Init transform---------
+    # For PIL Images (e.g. PNGs)
     transform_rgb = Compose([
         ToTensor(),
         Normalize(mean=[0.5, 0.5, 0.5],
                   std = [0.5, 0.5, 0.5])
     ])
     
+    # For Numpy Arrays (already in [0, 1], no ToTensor needed)
+    transform_norm = Normalize(mean=[0.5, 0.5, 0.5],
+                               std=[0.5, 0.5, 0.5])
+
     toPil = ToPILImage()
 
     # Validate and load generator and discriminator from config
@@ -147,13 +174,21 @@ if __name__ == '__main__':
     #--------Infer 1 img----------
 
         #-------Read input------------
-        s2 = Image.open(cfg_input['s2_path']).convert('RGB')
-
-        lc = Image.open(cfg_input['lc_path']).convert('RGB')
-        lc = lc.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc
-        s2_transformed, lc_transformed = transform_rgb(s2), transform_rgb(lc)
-        s2_transformed = s2_transformed.unsqueeze(0).to(device) # Add batch dimens at first -> [B, C ,H, W]
-        lc_transformed = lc_transformed.unsqueeze(0).to(device) #
+        is_npy = cfg_input['s2_path'].endswith('.npy')
+        
+        if is_npy:
+            s2_tensor = load_npy_as_tensor(cfg_input['s2_path'])
+            lc_tensor = load_npy_as_tensor(cfg_input['lc_path'])
+            # Only Normalize, no ToTensor
+            s2_transformed = transform_norm(s2_tensor).unsqueeze(0).to(device)
+            lc_transformed = transform_norm(lc_tensor).unsqueeze(0).to(device)
+        else:
+            s2 = Image.open(cfg_input['s2_path']).convert('RGB')
+            lc = Image.open(cfg_input['lc_path']).convert('RGB')
+            lc = lc.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc
+            s2_transformed, lc_transformed = transform_rgb(s2), transform_rgb(lc)
+            s2_transformed = s2_transformed.unsqueeze(0).to(device) # Add batch dimens at first -> [B, C ,H, W]
+            lc_transformed = lc_transformed.unsqueeze(0).to(device)
         
         
         #------Infer-----------
@@ -233,21 +268,38 @@ if __name__ == '__main__':
             lc_path = os.path.join(lc_folder_path, image_name)
             s1_path = os.path.join(s1_folder_path, image_name) if s1_folder_path else None
 
-            # Open image
-            s2_img = Image.open(s2_path).convert('RGB')
-            lc_img = Image.open(lc_path).convert('RGB')
-            lc_img = lc_img.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc_img            
-            s1_img = Image.open(s1_path).convert('L') if s1_path else None
+            # Read & Transform
+            is_npy = image_name.endswith('.npy')
+            
+            if is_npy:
+                s2_tensor = load_npy_as_tensor(s2_path)
+                lc_tensor = load_npy_as_tensor(lc_path)
+                s1_tensor = load_npy_as_tensor(s1_path, is_s1=True) if s1_path else None
+                
+                s2_transformed = transform_norm(s2_tensor)
+                lc_transformed = transform_norm(lc_tensor)
+                
+                if cfg_batch_infer['save_png']:
+                    # Convert to PIL for saving input views
+                    s2_img = toPil(s2_tensor)
+                    lc_img = toPil(lc_tensor)
+                    s1_img = toPil(s1_tensor) if s1_tensor is not None else None
+            else:
+                s2_img = Image.open(s2_path).convert('RGB')
+                lc_img = Image.open(lc_path).convert('RGB')
+                lc_img = lc_img.resize(size=tuple(config_dict['new_size_lc']), resample=Image.Resampling.BICUBIC) if config_dict['new_size_lc'] else lc_img            
+                s1_img = Image.open(s1_path).convert('L') if s1_path else None
 
-            s2_transformed, lc_transformed = transform_rgb(s2_img), transform_rgb(lc_img)
+                s2_transformed, lc_transformed = transform_rgb(s2_img), transform_rgb(lc_img)
             
             # Save: If save_png: True -> save (s2, lc, sr)
             if cfg_batch_infer['save_png']:
-                os.makedirs(os.path.join(save_dir, image_name.replace('.png', '')), exist_ok = True)
-                s2_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 's2.png'))
-                lc_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 'lc.png'))
+                save_base = image_name.rsplit('.', 1)[0]
+                os.makedirs(os.path.join(save_dir, save_base), exist_ok = True)
+                s2_img.save(os.path.join(save_dir, save_base, 's2.png'))
+                lc_img.save(os.path.join(save_dir, save_base, 'lc.png'))
                 if s1_img:
-                    s1_img.save(os.path.join(save_dir, image_name.replace('.png', ''), 's1.png'))
+                    s1_img.save(os.path.join(save_dir, save_base, 's1.png'))
             
             # Add to batch
             batch_s2.append(s2_transformed)
@@ -271,9 +323,10 @@ if __name__ == '__main__':
                 s1_denormed_batch = denorm(s1_gen_batch).cpu() # Move to CPU once for the whole batch before converting to PIL
                 s1_pil_list = [toPil(s1_denormed.squeeze(0)) for s1_denormed in s1_denormed_batch.chunk(chunks=len(batch_s2), dim=0)]
 
-                #Save s1_gen
+                # Save s1_gen
                 for i in range(len(s1_pil_list)):
-                    save_path = os.path.join(save_dir, batch_img_name[i].replace('.png', ''), 's1_gen.png')
+                    base_name = batch_img_name[i].rsplit('.', 1)[0]
+                    save_path = os.path.join(save_dir, base_name, 's1_gen.png')
                     if cfg_batch_infer['save_png']: # Check to save png format
                         s1_pil_list[i].save(save_path)
                         print(f'Saved at {save_path}')
@@ -289,7 +342,7 @@ if __name__ == '__main__':
                         else:
                             raw_tensor = s1_gen_batch[i].cpu()  # [C, H, W], range [-1, 1]
                         
-                        raw_save_path = os.path.join(save_dir, batch_img_name[i].replace('.png', ''))
+                        raw_save_path = os.path.join(save_dir, base_name)
                         save_raw_output(raw_tensor, raw_save_path, raw_format)
                         print(f'Saved raw at {raw_save_path}.{raw_format}')
 

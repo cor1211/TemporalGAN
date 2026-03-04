@@ -6,11 +6,11 @@ new_size_lc:
 batch_infer:
   action: True
   batch_size: 16
-  s2_folder_path: /mnt/data1tb/vinh/swin2-mose/output_x2/F_48_93_B_b_4
-  lc_folder_path: /mnt/data1tb/vinh/swin2-mose/data_croped/O2S_Inference/LandCover/F_48_93_B_b_4
-  s1_folder_path: 
-  data_len: -1
-  save_dir: /mnt/data1tb/vinh/benchmark_SRSAR/SAR5m-GT/F_48_93_B_b_4
+  s2_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited/valid/triplet_vh/s2
+  lc_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited/valid/triplet_vh/lc
+  s1_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited/valid/triplet_vh/s1
+  data_len: 20
+  save_dir: /mnt/data1tb/vinh/TemporalGAN/infer_test_npy
   whitelist_path: 
   save_png: True
   save_raw:

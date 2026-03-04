@@ -76,6 +76,7 @@ class Trainer():
 
         # ===== AMP =====
         self.scaler = torch.amp.GradScaler('cuda')
+        self.use_grad_clip = self.train_cfg.get('use_grad_clip', True)
         self.grad_clip_norm = self.train_cfg.get('grad_clip_norm', 1.0)
 
         # ===== LPIPS (lazy-loaded during validation to save VRAM) =====
@@ -372,8 +373,9 @@ LPIPS: {lpips_avg:.4f}
                     D_losses = (D_fake_loss + D_real_loss) / 2
 
                 self.scaler.scale(D_losses).backward()
-                self.scaler.unscale_(self.optD)
-                torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.grad_clip_norm)
+                if self.use_grad_clip:
+                    self.scaler.unscale_(self.optD)
+                    torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.grad_clip_norm)
                 self.scaler.step(self.optD)
 
 
@@ -390,8 +392,9 @@ LPIPS: {lpips_avg:.4f}
                     G_total_loss = self.lambda_l1 * G_l1_loss + G_gan_loss
 
                 self.scaler.scale(G_total_loss).backward()
-                self.scaler.unscale_(self.optG)
-                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.grad_clip_norm)
+                if self.use_grad_clip:
+                    self.scaler.unscale_(self.optG)
+                    torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.grad_clip_norm)
                 self.scaler.step(self.optG)
 
                 # Update scaler once per iteration (after both D and G steps)

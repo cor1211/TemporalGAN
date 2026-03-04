@@ -19,6 +19,7 @@ train:
   val_step: 1000
   lambda_l1: 100
   gan_loss: 'bce'  # 'mse' for LSGAN or 'bce' for vanilla GAN
+  use_grad_clip: True
   grad_clip_norm: 1.0
   resume_path: 
   strict_netG: True
