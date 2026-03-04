@@ -160,7 +160,7 @@ if __name__ == '__main__':
 
     #--------Init model------------
     netG = generator_module.Generator(s2_in_channels=3, lc_in_channels=3, out_channels=1).to(device)
-    ckpt = torch.load(Path(ckpt_path))
+    ckpt = torch.load(Path(ckpt_path), map_location='cuda:0')
     netG.load_state_dict(ckpt['netG_state_dict'])
 
     netG.eval() # Set eval mode globally first (fixes BN layers)

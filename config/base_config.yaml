@@ -24,6 +24,7 @@ train:
   resume_path: 
   strict_netG: True
   strict_netD: True
+  top_k: 3
 
 # Model architecture config
 model:

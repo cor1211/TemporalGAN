@@ -61,6 +61,10 @@ class Trainer():
         self.best_ssim = 0.0
         self.best_lpips = float('inf')  # Lower is better
 
+        self.top_k = self.train_cfg.get('top_k', 3)
+        self.top_k_ssim_list = []  # list of dicts: {'ssim': val, 'step': step, 'path': path}
+        self.top_k_lpips_list = [] # list of dicts: {'lpips': val, 'step': step, 'path': path}
+
         # ===== GAN Loss (configurable: 'mse' for LSGAN or 'bce' for vanilla) =====
         self.gan_loss_type = self.train_cfg.get('gan_loss', 'mse').lower()
         if self.gan_loss_type == 'bce':
@@ -106,6 +110,8 @@ class Trainer():
             self.current_step = checkpoint['step']
             self.best_ssim = checkpoint.get('best_ssim', 0.0)
             self.best_lpips = checkpoint.get('best_lpips', float('inf'))
+            self.top_k_ssim_list = checkpoint.get('top_k_ssim_list', [])
+            self.top_k_lpips_list = checkpoint.get('top_k_lpips_list', [])
 
             print(f"Resumed from step {self.current_step}. Best SSIM: {self.best_ssim:.4f} | Best LPIPS: {self.best_lpips:.4f}")
 
@@ -114,7 +120,7 @@ class Trainer():
             sys.exit(1)
     
     
-    def _save_checkpoint(self, step: int, is_best_ssim: bool, is_best_lpips: bool):
+    def _save_checkpoint(self, step: int, ssim_val: float, lpips_val: float, is_best_ssim: bool, is_best_lpips: bool):
         checkpoint_data = {
             'step': step,
             'netG_state_dict': self.netG.state_dict(),
@@ -123,29 +129,54 @@ class Trainer():
             'optD_state_dict': self.optD.state_dict(),
             'best_ssim': self.best_ssim,
             'best_lpips': self.best_lpips,
+            'top_k_ssim_list': self.top_k_ssim_list,
+            'top_k_lpips_list': self.top_k_lpips_list,
             'config': self.config
         }
-        # Always save last checkpoint
+        
+        # Always save 1 last checkpoint
         last_save_path = os.path.join(self.checkpoint_dir, 'last.pth')
         torch.save(checkpoint_data, last_save_path)
-        step_save_path = os.path.join(self.checkpoint_dir, f'{step}.pth')
-        torch.save(checkpoint_data, step_save_path)
 
-        # Save best SSIM checkpoint
+        # Save top SSIM checkpoints
         if is_best_ssim:
-            best_ssim_path = os.path.join(self.checkpoint_dir, 'best_ssim.pth')
-            torch.save(checkpoint_data, best_ssim_path)
-            named_path = os.path.join(self.checkpoint_dir, f'{step}-ssim_{self.best_ssim:.4f}.pth')
-            torch.save(checkpoint_data, named_path)
-            print(f"  ✅ New best SSIM model saved: {named_path}")
+            file_name_ssim = f"step_{step}_ssim_{ssim_val:.4f}.pth"
+            named_path_ssim = os.path.join(self.checkpoint_dir, file_name_ssim)
+            torch.save(checkpoint_data, named_path_ssim)
+            
+            self.top_k_ssim_list.append({'ssim': ssim_val, 'step': step, 'path': named_path_ssim})
+            self.top_k_ssim_list = sorted(self.top_k_ssim_list, key=lambda x: x['ssim'], reverse=True)
+            
+            if len(self.top_k_ssim_list) > self.top_k:
+                removed = self.top_k_ssim_list.pop(-1)
+                if os.path.exists(removed['path']):
+                    os.remove(removed['path'])
+                    
+            print(f"  ✅ New top SSIM model saved: {file_name_ssim}")
 
-        # Save best LPIPS checkpoint
+            if self.top_k_ssim_list[0]['step'] == step:
+                best_ssim_path = os.path.join(self.checkpoint_dir, 'best_ssim.pth')
+                torch.save(checkpoint_data, best_ssim_path)
+
+        # Save top LPIPS checkpoints
         if is_best_lpips:
-            best_lpips_path = os.path.join(self.checkpoint_dir, 'best_lpips.pth')
-            torch.save(checkpoint_data, best_lpips_path)
-            named_path = os.path.join(self.checkpoint_dir, f'{step}-lpips_{self.best_lpips:.4f}.pth')
-            torch.save(checkpoint_data, named_path)
-            print(f"  ✅ New best LPIPS model saved: {named_path}")
+            file_name_lpips = f"step_{step}_lpips_{lpips_val:.4f}.pth"
+            named_path_lpips = os.path.join(self.checkpoint_dir, file_name_lpips)
+            torch.save(checkpoint_data, named_path_lpips)
+            
+            self.top_k_lpips_list.append({'lpips': lpips_val, 'step': step, 'path': named_path_lpips})
+            self.top_k_lpips_list = sorted(self.top_k_lpips_list, key=lambda x: x['lpips'])
+            
+            if len(self.top_k_lpips_list) > self.top_k:
+                removed = self.top_k_lpips_list.pop(-1)
+                if os.path.exists(removed['path']):
+                    os.remove(removed['path'])
+
+            print(f"  ✅ New top LPIPS model saved: {file_name_lpips}")
+
+            if self.top_k_lpips_list[0]['step'] == step:
+                best_lpips_path = os.path.join(self.checkpoint_dir, 'best_lpips.pth')
+                torch.save(checkpoint_data, best_lpips_path)
         
         if not is_best_ssim and not is_best_lpips:
             print(f"  💾 Latest checkpoint saved at step {step}")
@@ -281,15 +312,20 @@ LPIPS: {lpips_avg:.4f}
             }, step=current_step)
 
         # ===== Dual-Best Checkpointing =====
-        is_best_ssim = ssim_avg > self.best_ssim
-        is_best_lpips = lpips_avg < self.best_lpips
+        is_best_ssim = False
+        if len(self.top_k_ssim_list) < self.top_k or ssim_avg > self.top_k_ssim_list[-1]['ssim']:
+            is_best_ssim = True
 
-        if is_best_ssim:
+        is_best_lpips = False
+        if len(self.top_k_lpips_list) < self.top_k or lpips_avg < self.top_k_lpips_list[-1]['lpips']:
+            is_best_lpips = True
+
+        if ssim_avg > self.best_ssim:
             self.best_ssim = ssim_avg
-        if is_best_lpips:
+        if lpips_avg < self.best_lpips:
             self.best_lpips = lpips_avg
         
-        self._save_checkpoint(current_step, is_best_ssim, is_best_lpips)
+        self._save_checkpoint(current_step, ssim_avg, lpips_avg, is_best_ssim, is_best_lpips)
 
         # Reset accumulated losses
         self.loss_D = 0.0
@@ -436,7 +472,7 @@ LPIPS: {lpips_avg:.4f}
             traceback.print_exc()
             # Emergency checkpoint save
             try:
-                self._save_checkpoint(self.current_step, False, False)
+                self._save_checkpoint(self.current_step, 0.0, float('inf'), False, False)
                 print("Emergency checkpoint saved.")
             except:
                 pass

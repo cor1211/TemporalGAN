@@ -1,9 +1,8 @@
-root_dir: /mnt/data1tb/vinh/benchmark_SRSAR/SAR5m-GT/F_48_93_B_b_4
-modalities: ['lc.png', 's2.png', 's1_gen.png']
+root_dir: /mnt/data1tb/vinh/TemporalGAN/trash
+modalities: ['lc.png', 's2.png', 's1_gen.png', 's1.png']
 quantity: -1
 
 save:
   action: True
-  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize-SAR5m-GT/F_48_93_B_b_4
-
+  root_save: /mnt/data1tb/vinh/TemporalGAN/plot/visualize-VH-valid
 show: False

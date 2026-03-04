@@ -1,4 +1,4 @@
-ckpt_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20260126-090000/best.pth
+ckpt_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20260126-090000/299000.pth
 dropout: False
 device: cuda
 new_size_lc:
@@ -10,11 +10,11 @@ batch_infer:
   lc_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited/valid/triplet_vh/lc
   s1_folder_path: /mnt/data1tb/vinh/TemporalGAN/dataset/o2s_splited/valid/triplet_vh/s1
   data_len: 20
-  save_dir: /mnt/data1tb/vinh/TemporalGAN/infer_test_npy
+  save_dir: /mnt/data1tb/vinh/TemporalGAN/trash
   whitelist_path: 
   save_png: True
   save_raw:
-    enabled: True  # Save raw tensor/numpy output for downstream training
+    enabled: False  # Save raw tensor/numpy output for downstream training
     format: npy     # Options: 'pt' (PyTorch), 'npy' (NumPy), 'npz' (NumPy compressed)
     save_denormed: False  # False: keep original [-1,1] range, True: denorm to [0,1]
 
