@@ -88,6 +88,7 @@ class Trainer():
 
         if self.resume_path:
             self._load_checkpoint(resume_path)
+            self._cleanup_orphaned_checkpoints()
 
 
     def _load_checkpoint(self, resume_path):
@@ -118,9 +119,62 @@ class Trainer():
         except Exception as e:
             print(f'Error loading checkpoint {e}. Double check resume path')
             sys.exit(1)
+
+    def _cleanup_orphaned_checkpoints(self):
+        import glob
+        tracked_paths = set([x['path'] for x in self.top_k_ssim_list] + [x['path'] for x in self.top_k_lpips_list])
+        tracked_basenames = set([os.path.basename(p) for p in tracked_paths])
+        
+        for file_path in glob.glob(os.path.join(self.checkpoint_dir, "step_*.pth")):
+            if os.path.basename(file_path) not in tracked_basenames:
+                try: os.remove(file_path)
+                except: pass
     
     
     def _save_checkpoint(self, step: int, ssim_val: float, lpips_val: float, is_best_ssim: bool, is_best_lpips: bool):
+        if not (is_best_ssim or is_best_lpips):
+            # Just save last
+            checkpoint_data = {
+                'step': step,
+                'netG_state_dict': self.netG.state_dict(),
+                'netD_state_dict': self.netD.state_dict(),
+                'optG_state_dict': self.optG.state_dict(),
+                'optD_state_dict': self.optD.state_dict(),
+                'best_ssim': self.best_ssim,
+                'best_lpips': self.best_lpips,
+                'top_k_ssim_list': self.top_k_ssim_list,
+                'top_k_lpips_list': self.top_k_lpips_list,
+                'config': self.config
+            }
+            last_save_path = os.path.join(self.checkpoint_dir, 'last.pth')
+            torch.save(checkpoint_data, last_save_path)
+            print(f"  💾 Latest checkpoint saved at step {step}")
+            return
+            
+        file_name = f"step_{step}_ssim_{ssim_val:.4f}_lpips_{lpips_val:.4f}.pth"
+        step_save_path = os.path.join(self.checkpoint_dir, file_name)
+
+        if is_best_ssim:
+            self.top_k_ssim_list.append({'ssim': ssim_val, 'step': step, 'path': step_save_path})
+            self.top_k_ssim_list = sorted(self.top_k_ssim_list, key=lambda x: x['ssim'], reverse=True)
+            if len(self.top_k_ssim_list) > self.top_k:
+                removed = self.top_k_ssim_list.pop(-1)
+                if os.path.exists(removed['path']):
+                    if not any(x['path'] == removed['path'] for x in self.top_k_lpips_list):
+                        try: os.remove(removed['path'])
+                        except: pass
+
+        if is_best_lpips:
+            self.top_k_lpips_list.append({'lpips': lpips_val, 'step': step, 'path': step_save_path})
+            self.top_k_lpips_list = sorted(self.top_k_lpips_list, key=lambda x: x['lpips'])
+            if len(self.top_k_lpips_list) > self.top_k:
+                removed = self.top_k_lpips_list.pop(-1)
+                if os.path.exists(removed['path']):
+                    if not any(x['path'] == removed['path'] for x in self.top_k_ssim_list):
+                        try: os.remove(removed['path'])
+                        except: pass
+
+        # Serialize after updating tracking lists
         checkpoint_data = {
             'step': step,
             'netG_state_dict': self.netG.state_dict(),
@@ -129,57 +183,38 @@ class Trainer():
             'optD_state_dict': self.optD.state_dict(),
             'best_ssim': self.best_ssim,
             'best_lpips': self.best_lpips,
-            'top_k_ssim_list': self.top_k_ssim_list,
-            'top_k_lpips_list': self.top_k_lpips_list,
+            'top_k_ssim_list': list(self.top_k_ssim_list),
+            'top_k_lpips_list': list(self.top_k_lpips_list),
             'config': self.config
         }
         
-        # Always save 1 last checkpoint
         last_save_path = os.path.join(self.checkpoint_dir, 'last.pth')
         torch.save(checkpoint_data, last_save_path)
-
-        # Save top SSIM checkpoints
-        if is_best_ssim:
-            file_name_ssim = f"step_{step}_ssim_{ssim_val:.4f}.pth"
-            named_path_ssim = os.path.join(self.checkpoint_dir, file_name_ssim)
-            torch.save(checkpoint_data, named_path_ssim)
-            
-            self.top_k_ssim_list.append({'ssim': ssim_val, 'step': step, 'path': named_path_ssim})
-            self.top_k_ssim_list = sorted(self.top_k_ssim_list, key=lambda x: x['ssim'], reverse=True)
-            
-            if len(self.top_k_ssim_list) > self.top_k:
-                removed = self.top_k_ssim_list.pop(-1)
-                if os.path.exists(removed['path']):
-                    os.remove(removed['path'])
-                    
-            print(f"  ✅ New top SSIM model saved: {file_name_ssim}")
-
-            if self.top_k_ssim_list[0]['step'] == step:
-                best_ssim_path = os.path.join(self.checkpoint_dir, 'best_ssim.pth')
-                torch.save(checkpoint_data, best_ssim_path)
-
-        # Save top LPIPS checkpoints
-        if is_best_lpips:
-            file_name_lpips = f"step_{step}_lpips_{lpips_val:.4f}.pth"
-            named_path_lpips = os.path.join(self.checkpoint_dir, file_name_lpips)
-            torch.save(checkpoint_data, named_path_lpips)
-            
-            self.top_k_lpips_list.append({'lpips': lpips_val, 'step': step, 'path': named_path_lpips})
-            self.top_k_lpips_list = sorted(self.top_k_lpips_list, key=lambda x: x['lpips'])
-            
-            if len(self.top_k_lpips_list) > self.top_k:
-                removed = self.top_k_lpips_list.pop(-1)
-                if os.path.exists(removed['path']):
-                    os.remove(removed['path'])
-
-            print(f"  ✅ New top LPIPS model saved: {file_name_lpips}")
-
-            if self.top_k_lpips_list[0]['step'] == step:
-                best_lpips_path = os.path.join(self.checkpoint_dir, 'best_lpips.pth')
-                torch.save(checkpoint_data, best_lpips_path)
         
-        if not is_best_ssim and not is_best_lpips:
-            print(f"  💾 Latest checkpoint saved at step {step}")
+        torch.save(checkpoint_data, step_save_path)
+        if is_best_ssim:
+            print(f"  ✅ New top SSIM model saved: {file_name}")
+        if is_best_lpips:
+            print(f"  ✅ New top LPIPS model saved: {file_name}")
+
+        import shutil
+        if is_best_ssim and self.top_k_ssim_list[0]['step'] == step:
+            best_ssim_path = os.path.join(self.checkpoint_dir, 'best_ssim.pth')
+            try:
+                if os.path.exists(best_ssim_path) or os.path.islink(best_ssim_path):
+                    os.remove(best_ssim_path)
+                os.symlink(file_name, best_ssim_path)
+            except Exception:
+                shutil.copyfile(step_save_path, best_ssim_path)
+            
+        if is_best_lpips and self.top_k_lpips_list[0]['step'] == step:
+            best_lpips_path = os.path.join(self.checkpoint_dir, 'best_lpips.pth')
+            try:
+                if os.path.exists(best_lpips_path) or os.path.islink(best_lpips_path):
+                    os.remove(best_lpips_path)
+                os.symlink(file_name, best_lpips_path)
+            except Exception:
+                shutil.copyfile(step_save_path, best_lpips_path)
 
 
     def _validate_step(self, current_step):
