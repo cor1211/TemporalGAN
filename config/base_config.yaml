@@ -15,11 +15,12 @@ train:
   seed: 42
   total_epochs: 250
   betas: [0.5, 0.999]
-  lr: 0.000001
+  lr: 0.00001
   val_step: 1000
   lambda_l1: 100
+  gan_loss: 'bce'  # 'mse' for LSGAN or 'bce' for vanilla GAN
   grad_clip_norm: 1.0
-  resume_path: /mnt/data1tb/vinh/TemporalGAN/checkpoints/exp_20260302-162734/last.pth
+  resume_path: 
   strict_netG: True
   strict_netD: True
 

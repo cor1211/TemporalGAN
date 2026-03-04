@@ -2,8 +2,7 @@ import os
 import torch
 import sys
 from tqdm import tqdm
-from torch.nn import MSELoss   # LSGAN objective
-from torch.nn import L1Loss
+from torch.nn import MSELoss, BCEWithLogitsLoss, L1Loss
 from torchvision.utils import make_grid
 from pathlib import Path
 import math
@@ -62,8 +61,14 @@ class Trainer():
         self.best_ssim = 0.0
         self.best_lpips = float('inf')  # Lower is better
 
-        # ===== Losses (LSGAN) =====
-        self.criterion_GAN = MSELoss()
+        # ===== GAN Loss (configurable: 'mse' for LSGAN or 'bce' for vanilla) =====
+        self.gan_loss_type = self.train_cfg.get('gan_loss', 'mse').lower()
+        if self.gan_loss_type == 'bce':
+            self.criterion_GAN = BCEWithLogitsLoss()
+            print('GAN Loss: BCEWithLogitsLoss (vanilla GAN)')
+        else:
+            self.criterion_GAN = MSELoss()
+            print('GAN Loss: MSELoss (LSGAN)')
         self.criterion_L1 = L1Loss()
         self.loss_G = 0.0
         self.loss_l1 = 0.0
