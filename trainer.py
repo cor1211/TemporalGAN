@@ -236,6 +236,7 @@ Average Train D Loss: {lossD_avg:.3f}
         print(f'Start Validating...')
 
         self.netG.eval()
+        self.netD.eval()
         
         # Lazy-load LPIPS model
         import lpips as lpips_lib
@@ -448,6 +449,7 @@ LPIPS: {lpips_avg:.4f}
                     self.scaler.unscale_(self.optD)
                     torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.grad_clip_norm)
                 self.scaler.step(self.optD)
+                self.scaler.update()
 
 
                 # ============ Train Generator ============
@@ -467,8 +469,6 @@ LPIPS: {lpips_avg:.4f}
                     self.scaler.unscale_(self.optG)
                     torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.grad_clip_norm)
                 self.scaler.step(self.optG)
-
-                # Update scaler once per iteration (after both D and G steps)
                 self.scaler.update()
 
 

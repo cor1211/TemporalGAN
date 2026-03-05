@@ -80,6 +80,12 @@ class O2SDataset(Dataset):
         lc = np.load(self.lc_path[index])
         s1 = np.load(self.s1_path[index])
 
+        # 1.1 Handle potential NaN/Inf arrays
+        for arr in [s2, lc, s1]:
+            if np.isnan(arr).any() or np.isinf(arr).any():
+                arr[np.isnan(arr)] = 0.0
+                arr[np.isinf(arr)] = 0.0
+
         # 2. Ensure Arrays have C channel to prepare for transformations (H, W, C)
         if s1.ndim == 2:
             s1 = np.expand_dims(s1, axis=-1)
