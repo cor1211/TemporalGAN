@@ -3,6 +3,7 @@ import torch
 import sys
 from tqdm import tqdm
 from torch.nn import MSELoss, BCEWithLogitsLoss, L1Loss
+from eval_metrics.loss_function import CharbonnierLoss, PerceptualLoss
 from torchvision.utils import make_grid
 from pathlib import Path
 import math
@@ -73,9 +74,26 @@ class Trainer():
         else:
             self.criterion_GAN = MSELoss()
             print('GAN Loss: MSELoss (LSGAN)')
-        self.criterion_L1 = L1Loss()
+            
+        self.use_charbonnier = self.train_cfg.get('use_charbonnier', False)
+        if self.use_charbonnier:
+            self.criterion_L1 = CharbonnierLoss()
+            print('Reconstruction Loss: CharbonnierLoss')
+        else:
+            self.criterion_L1 = L1Loss()
+            print('Reconstruction Loss: L1Loss')
+            
+        self.lambda_vgg = self.train_cfg.get('lambda_vgg', 0.0)
+        if self.lambda_vgg > 0.0:
+            vgg_layers = self.train_cfg.get('vgg_layers', ['relu2_2', 'relu3_3', 'relu4_3'])
+            self.criterion_VGG = PerceptualLoss(feature_layers=vgg_layers).to(self.device)
+            print(f'Perceptual Loss (VGG): Active with layers {vgg_layers}')
+        else:
+            self.criterion_VGG = None
+            
         self.loss_G = 0.0
         self.loss_l1 = 0.0
+        self.loss_vgg = 0.0
         self.loss_D = 0.0
 
         # ===== AMP =====
@@ -225,11 +243,13 @@ class Trainer():
         # Average train losses since last validation
         lossG_avg = self.loss_G / self.val_step
         lossL1_avg = self.loss_l1 / self.val_step
+        lossVgg_avg = self.loss_vgg / self.val_step
         lossD_avg = self.loss_D / self.val_step
 
         print(f"""Step [{current_step}/{self.total_steps}]
 {20 * '-'}
-Average Train L1 Loss: {lossL1_avg:.3f}
+Average Train L1/Char Loss: {lossL1_avg:.3f}
+Average Train VGG Loss: {lossVgg_avg:.3f}
 Average Train G Loss: {lossG_avg:.3f}
 Average Train D Loss: {lossD_avg:.3f}
 {20 * '-'}""")
@@ -312,6 +332,8 @@ LPIPS: {lpips_avg:.4f}
 
         # ===== TensorBoard Logging =====
         self.writer.add_scalar(tag='L1 Loss/Train_Step', scalar_value=lossL1_avg, global_step=current_step)
+        if self.criterion_VGG is not None:
+            self.writer.add_scalar(tag='VGG Loss/Train_Step', scalar_value=lossVgg_avg, global_step=current_step)
         self.writer.add_scalar(tag='G Loss/Train_Step', scalar_value=lossG_avg, global_step=current_step)
         self.writer.add_scalar(tag='D Loss/Train_Step', scalar_value=lossD_avg, global_step=current_step)
         self.writer.add_scalar(tag='Metrics/L1', scalar_value=l1_avg, global_step=current_step)
@@ -367,6 +389,7 @@ LPIPS: {lpips_avg:.4f}
         self.loss_D = 0.0
         self.loss_G = 0.0
         self.loss_l1 = 0.0
+        self.loss_vgg = 0.0
 
 
     @staticmethod
@@ -462,7 +485,13 @@ LPIPS: {lpips_avg:.4f}
                     D_fake_output = self.netD(s2, lc, s1_fake).float()
                     G_gan_loss = self.criterion_GAN(D_fake_output, torch.ones_like(D_fake_output))
                     G_l1_loss = self.criterion_L1(s1_fake.float(), s1.float())
+                    
                     G_total_loss = self.lambda_l1 * G_l1_loss + G_gan_loss
+                    
+                    G_vgg_loss = torch.tensor(0.0, device=self.device)
+                    if self.criterion_VGG is not None:
+                        G_vgg_loss = self.criterion_VGG(s1_fake.float(), s1.float())
+                        G_total_loss += self.lambda_vgg * G_vgg_loss
 
                 self.scaler.scale(G_total_loss).backward()
                 if self.use_grad_clip:
@@ -475,13 +504,18 @@ LPIPS: {lpips_avg:.4f}
                 # ============ Logging ============
                 self.loss_G += G_gan_loss.item()
                 self.loss_l1 += G_l1_loss.item()
+                if self.criterion_VGG is not None:
+                    self.loss_vgg += G_vgg_loss.item()
                 self.loss_D += D_losses.item()
 
-                pbar.set_postfix({
+                pbar_dict = {
                     'D': f'{D_losses.item():.3f}',
                     'G': f'{G_gan_loss.item():.3f}',
-                    'L1': f'{G_l1_loss.item():.3f}'
-                })
+                    'Rec': f'{G_l1_loss.item():.3f}'
+                }
+                if self.criterion_VGG is not None:
+                    pbar_dict['VGG'] = f'{G_vgg_loss.item():.3f}'
+                pbar.set_postfix(pbar_dict)
                 
                 # Step-level WandB logging (every 10 steps)
                 if self.use_wandb and self.current_step % 10 == 0:

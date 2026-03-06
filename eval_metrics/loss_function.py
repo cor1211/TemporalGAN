@@ -115,6 +115,136 @@ class WeightedL1Loss(nn.Module):
         return loss.to(torch.float64)
 
 
+class CharbonnierLoss(nn.Module):
+    """
+    Charbonnier Loss (L1 variant).
+    Formula: sqrt((x - y)^2 + epsilon^2)
+    This is more robust to outliers and prevents dead zones around 0, leading to
+    smoother convergence than standard L1 loss.
+    """
+    def __init__(self, eps=1e-3):
+        super(CharbonnierLoss, self).__init__()
+        self.eps = eps
+
+    def forward(self, x, y):
+        diff = x - y
+        loss = torch.mean(torch.sqrt(diff * diff + self.eps * self.eps))
+        return loss
+
+import torchvision.models as models
+
+class PerceptualLoss(nn.Module):
+    """
+    Perceptual Loss using VGG19. 
+    It measures the difference between feature maps of generated and ground-truth images.
+    """
+    def __init__(self, feature_layers=['relu2_2', 'relu3_3', 'relu4_3'], use_cuda=True):
+        super(PerceptualLoss, self).__init__()
+        
+        # Load VGG19 pretrained on ImageNet
+        vgg = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1).features
+        
+        self.slice1 = nn.Sequential()
+        self.slice2 = nn.Sequential()
+        self.slice3 = nn.Sequential()
+        self.slice4 = nn.Sequential()
+        self.slice5 = nn.Sequential()
+        
+        # Define the splits based on layer names
+        # VGG19 maxpool indices: 4, 9, 18, 27, 36
+        # 'relu1_1': 1, 'relu1_2': 3
+        # 'relu2_1': 6, 'relu2_2': 8
+        # 'relu3_1': 11, 'relu3_2': 13, 'relu3_3': 15, 'relu3_4': 17
+        # 'relu4_1': 20, 'relu4_2': 22, 'relu4_3': 24, 'relu4_4': 26
+        # 'relu5_1': 29, 'relu5_2': 31, 'relu5_3': 33, 'relu5_4': 35
+        
+        layer_indices = {
+            'relu1_1': 1, 'relu1_2': 3,
+            'relu2_1': 6, 'relu2_2': 8,
+            'relu3_1': 11, 'relu3_2': 13, 'relu3_3': 15, 'relu3_4': 17,
+            'relu4_1': 20, 'relu4_2': 22, 'relu4_3': 24, 'relu4_4': 26,
+            'relu5_1': 29, 'relu5_2': 31, 'relu5_3': 33, 'relu5_4': 35
+        }
+        
+        # Build slices
+        for x in range(layer_indices.get('relu1_2', 4)):
+            self.slice1.add_module(str(x), vgg[x])
+        for x in range(layer_indices.get('relu1_2', 4), layer_indices.get('relu2_2', 9)):
+            self.slice2.add_module(str(x), vgg[x])
+        for x in range(layer_indices.get('relu2_2', 9), layer_indices.get('relu3_3', 16)):
+            self.slice3.add_module(str(x), vgg[x])
+        for x in range(layer_indices.get('relu3_3', 16), layer_indices.get('relu4_3', 25)):
+            self.slice4.add_module(str(x), vgg[x])
+        for x in range(layer_indices.get('relu4_3', 25), layer_indices.get('relu5_3', 34)):
+            self.slice5.add_module(str(x), vgg[x])
+            
+        if use_cuda:
+            self.slice1.cuda()
+            self.slice2.cuda()
+            self.slice3.cuda()
+            self.slice4.cuda()
+            self.slice5.cuda()
+            
+        for param in self.parameters():
+            param.requires_grad = False
+            
+        self.feature_layers = feature_layers
+        self.criterion = nn.L1Loss()
+        
+        # ImageNet normalization parameters (required for VGG)
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def _normalize(self, x):
+        # Assumes x is in range [-1, 1] as standard for GANs in this pipeline
+        # Map [-1, 1] to [0, 1] first
+        x = (x + 1.0) / 2.0
+        return (x - self.mean) / self.std
+
+    def forward(self, X, Y):
+        # If inputs are 1 channel (SAR), repeat to 3 channels for VGG
+        if X.shape[1] == 1:
+            X = X.repeat(1, 3, 1, 1)
+        if Y.shape[1] == 1:
+            Y = Y.repeat(1, 3, 1, 1)
+            
+        X = self._normalize(X)
+        Y = self._normalize(Y)
+        
+        h_x = self.slice1(X)
+        h_y = self.slice1(Y)
+        out_x_1 = h_x
+        out_y_1 = h_y
+        
+        h_x = self.slice2(h_x)
+        h_y = self.slice2(h_y)
+        out_x_2 = h_x
+        out_y_2 = h_y
+        
+        h_x = self.slice3(h_x)
+        h_y = self.slice3(h_y)
+        out_x_3 = h_x
+        out_y_3 = h_y
+        
+        h_x = self.slice4(h_x)
+        h_y = self.slice4(h_y)
+        out_x_4 = h_x
+        out_y_4 = h_y
+        
+        h_x = self.slice5(h_x)
+        h_y = self.slice5(h_y)
+        out_x_5 = h_x
+        out_y_5 = h_y
+        
+        features_x = {'relu1_2': out_x_1, 'relu2_2': out_x_2, 'relu3_3': out_x_3, 'relu4_3': out_x_4, 'relu5_3': out_x_5}
+        features_y = {'relu1_2': out_y_1, 'relu2_2': out_y_2, 'relu3_3': out_y_3, 'relu4_3': out_y_4, 'relu5_3': out_y_5}
+        
+        loss = 0.0
+        for layer in self.feature_layers:
+            if layer in features_x:
+                loss += self.criterion(features_x[layer], features_y[layer])
+                
+        return loss
 if __name__ == "__main__":
     # Create a dummy input and target image
     input = torch.rand((1, 3, 256, 256)).to(torch.float16)
